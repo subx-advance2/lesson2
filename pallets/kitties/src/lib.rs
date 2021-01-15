@@ -3,8 +3,9 @@
 use codec::{Encode, Decode};
 use frame_support::{StorageMap, StorageValue, decl_error, decl_event, decl_module, decl_storage, ensure, sp_std, traits::Randomness};
 use frame_system::{ensure_signed};
-use sp_io::hashing::blake2_128;
 use sp_runtime::DispatchError;
+//use sp_core::hashing::blake2_128;
+use sp_io::hashing::blake2_128;
 
 type KittyIndex = u32;
 
@@ -204,7 +205,7 @@ mod tests {
 
             let new_block_number = System::block_number(); 
             System::on_initialize(new_block_number);
-            Kitties:on_initialize(new_block_number);
+            Kitties::on_initialize(new_block_number);
         }
     }
 
