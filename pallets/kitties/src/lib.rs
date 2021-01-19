@@ -1,13 +1,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use codec::{Encode, Decode};
-use frame_support::{StorageMap, StorageValue, decl_error, decl_event, decl_module, decl_storage, ensure, sp_std, traits::Randomness};
+use frame_support::{
+    StorageMap, StorageValue, decl_error, decl_event, decl_module, decl_storage, ensure, 
+    sp_std, traits::Randomness,
+};
+use pallet_balances::*;
 use frame_system::{ensure_signed};
 use sp_runtime::DispatchError;
 //use sp_core::hashing::blake2_128;
 use sp_io::hashing::blake2_128;
 
-type KittyIndex = u32;
+//type KittyIndex = u32;
 
 #[derive(Encode, Decode)]
 pub struct Kitty(pub [u8; 16]);
@@ -15,13 +19,17 @@ pub struct Kitty(pub [u8; 16]);
 pub trait Trait: frame_system::Trait {
     type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
     type Randomness: Randomness<Self::Hash>;
+    type KittyIndex: KittyIndex;
 }
 
 decl_storage! {
     trait Store for Module<T: Trait> as Kitties {
-        pub Kitties get(fn kitties): map hasher(blake2_128_concat) KittyIndex => Option<Kitty>;
-        pub KittiesCount get(fn kitties_count): KittyIndex;
-        pub KittyOwners get(fn kitty_owner): map hasher(blake2_128_concat) KittyIndex => Option<T::AccountId>;
+        pub Kitties get(fn kitties): map hasher(blake2_128_concat) T::KittyIndex => Option<Kitty>;
+        pub KittiesCount get(fn kitties_count): T::KittyIndex;
+        pub KittyOwners get(fn kitty_owner): map hasher(blake2_128_concat) T::KittyIndex => Option<T::AccountId>;
+
+        // 帐号所拥有的kitties
+        pub OwnerKitties: map hasher(blake2_128_concat) T::AccountId => Option<Vec<Kitty>>;
     }
 }
 
@@ -34,7 +42,7 @@ decl_error! {
 }
 
 decl_event! {
-    pub enum Event<T> where <T as frame_system::Trait>::AccountId, {
+    pub enum Event<T> where <T as frame_system::Trait>::AccountId {
         Created(AccountId, KittyIndex),
         Transferred(AccountId, AccountId, KittyIndex),
     }
@@ -58,7 +66,7 @@ decl_module! {
         }
 
         #[weight = 0]
-        pub fn transfer(origin, to: T::AccountId, kitty_id: KittyIndex) {
+        pub fn transfer(origin, to: T::AccountId, kitty_id: T::KittyIndex) {
             let sender = ensure_signed(origin)?;
             
             <KittyOwners<T>>::insert(kitty_id, to.clone());
@@ -66,7 +74,7 @@ decl_module! {
         }
 
         #[weight = 0]
-        pub fn breed(origin, kitty_id_1: KittyIndex, kitty_id_2: KittyIndex) {
+        pub fn breed(origin, kitty_id_1: T::KittyIndex, kitty_id_2: T::KittyIndex) {
             let sender = ensure_signed(origin)?;
             let new_kitty_id = Self::do_breed(&sender, kitty_id_1, kitty_id_2)?;
             
@@ -77,22 +85,24 @@ decl_module! {
 
 impl<T: Trait> Module<T> {
 
-    fn insert_kitty(owner: &T::AccountId, kitty_id: KittyIndex, kitty: Kitty) {
+    fn insert_kitty(owner: &T::AccountId, kitty_id: T::KittyIndex, kitty: Kitty) {
         Kitties::insert(kitty_id, kitty);
         KittiesCount::put(kitty_id + 1);
         <KittyOwners<T>>::insert(kitty_id, owner);
+
+        Self::set_owner_kitties(owner, kitty);
     }
 
-    fn next_kitty_id() -> sp_std::result::Result<KittyIndex, DispatchError> {
+    fn next_kitty_id() -> sp_std::result::Result<T::KittyIndex, DispatchError> {
         let kitty_id = Self::kitties_count();
-        if kitty_id == KittyIndex::max_value() {
+        if kitty_id == T::KittyIndex::max_value() {
             return Err(Error::<T>::KittiesCountOverflow.into());
         }
 
         Ok(kitty_id)
     }
 
-    fn do_breed(sender: &T::AccountId, kitty_id_1: KittyIndex, kitty_id_2: KittyIndex) -> sp_std::result::Result<KittyIndex, DispatchError> {
+    fn do_breed(sender: &T::AccountId, kitty_id_1: T::KittyIndex, kitty_id_2: T::KittyIndex) -> sp_std::result::Result<T::KittyIndex, DispatchError> {
         let kitty1 = Self::kitties(kitty_id_1).ok_or(Error::<T>::InvalidKittyId)?;
         let kitty2 = Self::kitties(kitty_id_2).ok_or(Error::<T>::InvalidKittyId)?;
 
@@ -110,7 +120,10 @@ impl<T: Trait> Module<T> {
             new_dna[i] = Self::combine_dna(kitty1_dna[i], kitty2_dna[i], selector[i]);
         }
 
-        Self::insert_kitty(sender, kitty_id, Kitty(new_dna));
+        let new_kitty = Kitty(new_dna);
+        Self::insert_kitty(sender, kitty_id, new_kitty);
+
+        Self::set_owner_kitties(sender, new_kitty);
 
         Ok(kitty_id)
     }
@@ -128,19 +141,39 @@ impl<T: Trait> Module<T> {
     fn combine_dna(dna1: u8, dna2: u8, selector: u8) -> u8 {
         (selector & dna1) | (!selector & dna2)
     }
+
+    // 设置帐户所有的kitties
+    fn set_owner_kitties(owner: &T::AccountId, kitty: Kitty) {
+        // 保存帐号所拥有的所有kitties
+        if <OwnerKitties<T>>::contains_key(owner) {
+            let (kitties, _) = <OwnerKitties<T>>::get(&owner);
+            kitties.push(kitty);
+        } else {
+            let mut kitties = vec![kitty];
+            <OwnerKitties<T>>::insert(owner, &kitties);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::RawEvent;
 
     use sp_core::H256;
-    use frame_support::{impl_outer_origin, parameter_types, weights::Weight, traits::{OnFinalize, OnInitialize}};
+    use frame_support::{impl_outer_event, impl_outer_origin, parameter_types, traits::{OnFinalize, OnInitialize}, weights::Weight};
     use frame_system as system;
     use sp_runtime::{traits::{BlakeTwo256, IdentityLookup}, testing::Header, Perbill};
 
     impl_outer_origin!{
         pub enum Origin for Test {}
+    }
+
+    impl_outer_event! {
+        pub enum Event for Test {
+            system<T>,
+            tests<T>,
+        }
     }
 
     #[derive(Clone, Eq, PartialEq, Debug)]
@@ -164,7 +197,7 @@ mod tests {
         type AccountId = u64;
         type Lookup = IdentityLookup<Self::AccountId>;
         type Header = Header;
-        type Event = ();
+        type Event = Event;
         type BlockHashCount = BlockHashCount;
         type MaximumBlockWeight = MaximumBlockWeight;
         type DbWeight = ();
@@ -186,10 +219,11 @@ mod tests {
     impl Trait for Test {
         type Event = ();
         type Randomness = Randomness;
+        type KittyIndex = ();
     }
 
-    pub type Kitties = Module<Test>;
-    pub type System = frame_system::Module<Test>;
+    pub type KittiesModule = Module<Test>;
+    pub type System = system::Module<Test>;
 
     fn new_test_ext() -> sp_io::TestExternalities {
         system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
@@ -199,13 +233,13 @@ mod tests {
         while System::block_number() < n {
             let block_number = System::block_number();
 
-            Kitties::on_finalize(block_number);
+            KittiesModule::on_finalize(block_number);
             System::on_finalize(block_number);
             System::set_block_number(block_number + 1);
 
             let new_block_number = System::block_number(); 
             System::on_initialize(new_block_number);
-            Kitties::on_initialize(new_block_number);
+            KittiesModule::on_initialize(new_block_number);
         }
     }
 
@@ -213,7 +247,64 @@ mod tests {
     fn owned_kitties_can_append_values() {
         new_test_ext().execute_with(|| {
             run_to_block(10);
-            assert_eq!(Kitties::create(Origin::signed(1),), Ok(()));
+            assert_eq!(KittiesModule::create(Origin::signed(1),), Ok(()));
+        })
+    }
+
+    // 创建事件检测
+    #[test]
+    fn should_trigger_created_event() {
+        new_test_ext().execute_with(|| {
+            run_to_block(10);
+
+            let sender = ensure_signed(Origin::signed(1)).unwrap();
+
+            assert!(System::events().iter().any(|a| {
+                a.event == Event::tests(RawEvent::Created(sender, 1))
+            }));
+        })
+    }
+
+    #[test]
+    fn can_transfer() {
+        new_test_ext().execute_with(|| {
+            run_to_block(10);
+
+            let owner_1 = ensure_signed(Origin::signed(1)).unwrap();
+            let owner_2 = ensure_signed(Origin::signed(2)).unwrap();
+
+            KittiesModule::create(owner_1);
+            KittiesModule::create(owner_2);
+
+            assert_eq!(KittiesModule::transfer(owner_1, owner_2, 1), Ok(()));
+        })
+    }
+
+    #[test]
+    fn can_do_breed() {
+        new_test_ext().execute_with(|| {
+            run_to_block(10);
+
+            let owner_1 = ensure_signed(Origin::signed(1)).unwrap();
+            let owner_2 = ensure_signed(Origin::signed(2)).unwrap();
+
+            KittiesModule::create(owner_1);
+            KittiesModule::create(owner_2);
+
+            assert_eq!(KittiesModule::breed(owner_1, 1, 2), Ok(()));
+        })
+    }
+
+    #[test]
+    fn can_not_do_breed_with_same_kitty_id() {
+        new_test_ext().execute_with(|| {
+            run_to_block(10);
+
+            let owner_1 = ensure_signed(Origin::signed(1)).unwrap();
+
+            KittiesModule::create(owner_1);
+
+            assert_eq!(KittiesModule::breed(owner_1, 1, 1), Ok(()));
         })
     }
 }

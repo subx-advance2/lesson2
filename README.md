@@ -1,3 +1,8 @@
+
+# 指出视频中实现kitties的一个bug
+
+    pallet-randomness-collective-flip这个类库没有导入引起编译错误。Randomness的一个实现
+
 # Substrate Node Template
 
 A new FRAME-based Substrate node, ready for hacking :rocket:
