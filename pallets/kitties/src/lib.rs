@@ -3,11 +3,11 @@
 use codec::{Encode, Decode};
 use frame_support::{
     StorageMap, StorageValue, decl_error, decl_event, decl_module, decl_storage, ensure, 
-    sp_std, traits::Randomness,
+    sp_std, traits::Randomness, Parameter
 };
 use pallet_balances::*;
 use frame_system::{ensure_signed};
-use sp_runtime::DispatchError;
+use sp_runtime::{DispatchError, traits::{AtLeast32Bit, Member, Bounded,}};
 //use sp_core::hashing::blake2_128;
 use sp_io::hashing::blake2_128;
 
@@ -19,8 +19,10 @@ pub struct Kitty(pub [u8; 16]);
 pub trait Trait: frame_system::Trait {
     type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
     type Randomness: Randomness<Self::Hash>;
-    type KittyIndex: KittyIndex;
+    type KittyIndex: Parameter + Member + AtLeast32Bit + Default + Copy;
 }
+
+type OwnedKittiesList<T> = LinkedList<OwnedKitties<T>, <T as system::Trait>::AccountId, <T as Trait>::KittyIndex>;
 
 decl_storage! {
     trait Store for Module<T: Trait> as Kitties {
@@ -29,7 +31,7 @@ decl_storage! {
         pub KittyOwners get(fn kitty_owner): map hasher(blake2_128_concat) T::KittyIndex => Option<T::AccountId>;
 
         // 帐号所拥有的kitties
-        pub OwnerKitties: map hasher(blake2_128_concat) T::AccountId => Option<Vec<Kitty>>;
+        pub OwnedKitties get(fn owned_kitties): map hasher(blake2_128_concat) T::AccountId => Option<Vec<T::KittyIndex>>;
     }
 }
 
@@ -42,7 +44,9 @@ decl_error! {
 }
 
 decl_event! {
-    pub enum Event<T> where <T as frame_system::Trait>::AccountId {
+    pub enum Event<T> where 
+        <T as frame_system::Trait>::AccountId, 
+        <T as Trait>::KittyIndex {
         Created(AccountId, KittyIndex),
         Transferred(AccountId, AccountId, KittyIndex),
     }
@@ -86,11 +90,11 @@ decl_module! {
 impl<T: Trait> Module<T> {
 
     fn insert_kitty(owner: &T::AccountId, kitty_id: T::KittyIndex, kitty: Kitty) {
-        Kitties::insert(kitty_id, kitty);
-        KittiesCount::put(kitty_id + 1);
+        Kitties::<T>::insert(kitty_id, kitty);
+        KittiesCount::<T>::put(kitty_id + 1.into());
         <KittyOwners<T>>::insert(kitty_id, owner);
 
-        Self::set_owner_kitties(owner, kitty);
+        Self::insert_owned_kitties(owner, kitty);
     }
 
     fn next_kitty_id() -> sp_std::result::Result<T::KittyIndex, DispatchError> {
@@ -123,7 +127,7 @@ impl<T: Trait> Module<T> {
         let new_kitty = Kitty(new_dna);
         Self::insert_kitty(sender, kitty_id, new_kitty);
 
-        Self::set_owner_kitties(sender, new_kitty);
+        Self::insert_owned_kitties(sender, new_kitty);
 
         Ok(kitty_id)
     }
@@ -143,14 +147,14 @@ impl<T: Trait> Module<T> {
     }
 
     // 设置帐户所有的kitties
-    fn set_owner_kitties(owner: &T::AccountId, kitty: Kitty) {
+    fn insert_owned_kitties(owner: &T::AccountId, kitty: Kitty) {
         // 保存帐号所拥有的所有kitties
-        if <OwnerKitties<T>>::contains_key(owner) {
-            let (kitties, _) = <OwnerKitties<T>>::get(&owner);
-            kitties.push(kitty);
+        if <OwnedKitties<T>>::contains_key(owner) {
+            let kittyList = <OwnedKitties<T>>::get(&owner);
+            kittyList::push(kitty);
         } else {
-            let mut kitties = vec![kitty];
-            <OwnerKitties<T>>::insert(owner, &kitties);
+            let mut kittyList = vec![kitty];
+            <OwnedKitties<T>>::insert(owner, &kittyList);
         }
     }
 }
@@ -219,7 +223,7 @@ mod tests {
     impl Trait for Test {
         type Event = ();
         type Randomness = Randomness;
-        type KittyIndex = ();
+        type KittyIndex = u32;
     }
 
     pub type KittiesModule = Module<Test>;
